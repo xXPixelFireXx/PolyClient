@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft 1.21.11 Web Client</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; height: 95vh; box-sizing: border-box; }
+        .panel { background: #2d2d2d; padding: 15px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
+        .panel div { display: flex; flex-direction: column; gap: 5px; }
+        input, button { padding: 8px 12px; border-radius: 4px; border: 1px solid #444; background: #3c3c3c; color: #fff; }
+        button { background: #4CAF50; cursor: pointer; border: none; font-weight: bold; margin-top: auto; }
+        button.disconnect { background: #f44336; }
+        
+        .main-content { display: flex; gap: 15px; flex: 1; min-height: 0; position: relative; }
+        #viewer-container { flex: 2; background: #000; border-radius: 8px; position: relative; overflow: hidden; cursor: pointer; }
+        
+        /* Crosshair */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 12px; height: 12px;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 5;
+        }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255, 255, 255, 0.8); }
+        #crosshair::before { top: 5px; left: 0; width: 12px; height: 2px; }
+        #crosshair::after { top: 0; left: 5px; width: 2px; height: 12px; }
+
+        #click-prompt {
+            position: absolute; top: 10px; right: 10px; background: rgba(0, 0, 0, 0.7);
+            padding: 6px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 5;
+        }
+
+        /* Minecraft In-Game Chat HUD (Bottom Left) */
+        #minecraft-chat-hud {
+            position: absolute;
+            bottom: 75px;
+            left: 15px;
+            width: 350px;
+            max-height: 120px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            pointer-events: none;
+            z-index: 20;
+        }
+        .chat-line {
+            background: rgba(0, 0, 0, 0.4);
+            padding: 4px 8px;
+            font-size: 13px;
+            border-radius: 2px;
+            text-shadow: 1px 1px #000;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chat-line span.sender { font-weight: bold; color: #55ff55; }
+        .chat-line span.server-sender { font-weight: bold; color: #ffff55; }
+
+        /* Chat Input Box (Appears when T is pressed) */
+        #chat-input-container {
+            position: absolute;
+            bottom: 70px;
+            left: 15px;
+            width: 350px;
+            display: none;
+            z-index: 25;
+        }
+        #chat-input-container input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #555;
+            color: #fff;
+            padding: 6px 8px;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        /* Mobile Touch Controls */
+        #action-panel {
+            position: absolute; top: 15px; left: 15px; display: flex; flex-direction: column; gap: 8px; z-index: 10; display: none;
+        }
+        @media (max-width: 768px), (pointer: coarse) {
+            #action-panel { display: flex; }
+            #click-prompt { display: none; }
+        }
+
+        /* Hotbar */
+        #hotbar {
+            position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%);
+            display: flex; background: rgba(0, 0, 0, 0.6); border: 2px solid #333; padding: 4px; border-radius: 4px; gap: 4px; z-index: 10;
+        }
+        .hotbar-slot {
+            width: 45px; height: 45px; background: #8b8b8b; border: 2px solid #373737;
+            border-top-color: #fff; border-left-color: #fff; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; font-size: 10px; color: #fff; cursor: pointer; position: relative;
+        }
+        .hotbar-slot.selected { border-color: #fff; outline: 2px solid #ffff55; }
+        .item-count { position: absolute; bottom: 2px; right: 4px; font-weight: bold; text-shadow: 1px 1px #000; }
+
+        #chat-container { flex: 1; display: flex; flex-direction: column; background: #2d2d2d; border-radius: 8px; padding: 10px; display: none; } /* Hidden side log since HUD is active */
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <h2>Minecraft 1.21.11 Web Client</h2>
+    
+    <div class="panel">
+        <div>
+            <label>Username:</label>
+            <input type="text" id="username" value="SteveBot">
+        </div>
+        <div>
+            <label>Server IP:</label>
+            <input type="text" id="host" placeholder="play.example.com">
+        </div>
+        <div>
+            <label>Port:</label>
+            <input type="number" id="port" value="25565" style="width: 80px;">
+        </div>
+        <button id="connect-btn" onclick="toggleConnection()">Connect</button>
+    </div>
+
+    <div class="main-content">
+        <div id="viewer-container">
+            <div id="crosshair"></div>
+            <div id="click-prompt">Click viewport to lock mouse & play (ESC to exit)</div>
+
+            <!-- Minecraft In-Game Chat HUD -->
+            <div id="minecraft-chat-hud"></div>
+
+            <!-- T-Key Chat Input Overlay -->
+            <div id="chat-input-container">
+                <input type="text" id="minecraft-chat-input" placeholder="Press Enter to send chat or command..." autocomplete="off">
+            </div>
+
+            <!-- Mobile Controls -->
+            <div id="action-panel">
+                <div style="display: flex; gap: 6px;">
+                    <button onclick="useItem(true)" onmouseup="useItem(false)" ontouchstart="useItem(true)" ontouchend="useItem(false)" style="background: #2196F3; padding: 5px 8px; font-size:11px;">Hold / Eat</button>
+                    <button onclick="attackTarget()" style="background: #e91e63; padding: 5px 8px; font-size:11px;">Attack</button>
+                    <button onclick="placeBlock()" style="background: #ff9800; padding: 5px 8px; font-size:11px;">Place</button>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 40px); gap: 4px; margin-top: 5px;">
+                    <div></div><button ontouchstart="startMove('forward')" ontouchend="stopMove('forward')" style="background:#444;">W</button><div></div>
+                    <button ontouchstart="startMove('left')" ontouchend="stopMove('left')" style="background:#444;">A</button>
+                    <button ontouchstart="startMove('back')" ontouchend="stopMove('back')" style="background:#444;">S</button>
+                    <button ontouchstart="startMove('right')" ontouchend="stopMove('right')" style="background:#444;">D</button>
+                </div>
+                <button onclick="jumpBot()" style="background: #607d8b; width: 128px; padding: 5px; font-size:11px;">Jump</button>
+            </div>
+
+            <div id="hotbar"></div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        // --- Procedurally Generated Low-Poly Textures ---
+        function createPixelTexture(colorHex, patternFunc) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = colorHex;
+            ctx.fillRect(0, 0, 16, 16);
+            if (patternFunc) patternFunc(ctx);
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.magFilter = THREE.NearestFilter;
+            texture.minFilter = THREE.NearestFilter;
+            return texture;
+        }
+
+        // Generate procedural pixel-art textures
+        const grassTex = createPixelTexture('#55aa55', (ctx) => {
+            ctx.fillStyle = '#3b7a3b';
+            for(let i=0; i<20; i++) ctx.fillRect(Math.random()*16, Math.random()*16, 1, 1);
+        });
+        const dirtTex = createPixelTexture('#866043', (ctx) => {
+            ctx.fillStyle = '#5c4028';
+            for(let i=0; i<30; i++) ctx.fillRect(Math.random()*16, Math.random()*16, 1, 1);
+        });
+
+        // --- Three.js Setup ---
+        const container = document.getElementById('viewer-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87ceeb);
+
+        const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 3, 6);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        const textureLoader = new THREE.TextureLoader();
+        const steveGroup = new THREE.Group();
+        
+        textureLoader.load('/steve.png', (tex) => {
+            tex.magFilter = THREE.NearestFilter;
+            tex.minFilter = THREE.NearestFilter;
+            const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: true });
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, 0.3), mat);
+            body.position.y = 0.95;
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), mat);
+            head.position.y = 1.65;
+            steveGroup.add(body, head);
+        }, undefined, () => {
+            const fallback = new THREE.MeshLambertMaterial({ color: 0x00aa00 });
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, 0.3), fallback);
+            body.position.y = 0.95;
+            steveGroup.add(body);
+        });
+        scene.add(steveGroup);
+
+        const floor = new THREE.Mesh(new THREE.BoxGeometry(20, 1, 20), new THREE.MeshLambertMaterial({ map: grassTex }));
+        floor.position.y = -0.5;
+        scene.add(floor);
+
+        // --- Pointer Lock & Camera Rotation ---
+        let yaw = 0, pitch = 0;
+        let isPointerLocked = false;
+        let isChatOpen = false;
+
+        container.addEventListener('click', () => {
+            if (!isChatOpen && document.pointerLockElement !== container) {
+                container.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isPointerLocked = (document.pointerLockElement === container);
+            document.getElementById('click-prompt').style.display = isPointerLocked ? 'none' : 'block';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isPointerLocked) return;
+            const sensitivity = 0.002;
+            yaw -= e.movementX * sensitivity;
+            pitch -= e.movementY * sensitivity;
+            pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
+
+            const radius = 6;
+            camera.position.x = steveGroup.position.x + radius * Math.sin(yaw) * Math.cos(pitch);
+            camera.position.y = steveGroup.position.y + 1.5 + radius * Math.sin(pitch);
+            camera.position.z = steveGroup.position.z + radius * Math.cos(yaw) * Math.cos(pitch);
+            camera.lookAt(steveGroup.position.x, steveGroup.position.y + 1.2, steveGroup.position.z);
+        });
+
+        container.addEventListener('mousedown', (e) => {
+            if (!isPointerLocked) return;
+            if (e.button === 0) attackTarget();
+            else if (e.button === 2) { useItem(true); placeBlock(); }
+        });
+        container.addEventListener('mouseup', (e) => { if (e.button === 2) useItem(false); });
+        container.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        function animate() {
+            requestAnimationFrame(animate);
+            steveGroup.position.y = Math.sin(Date.now() * 0.003) * 0.04;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- Minecraft In-Game Chat HUD Logic (Max 4 messages visible) ---
+        const chatHud = document.getElementById('minecraft-chat-hud');
+        const chatInputContainer = document.getElementById('chat-input-container');
+        const chatInputField = document.getElementById('minecraft-chat-input');
+        let messageHistory = [];
+
+        socket.on('chat-message', (data) => {
+            messageHistory.push(data);
+            if (messageHistory.length > 20) messageHistory.shift(); // Keep logs
+            renderChatHud();
+        });
+
+        function renderChatHud() {
+            chatHud.innerHTML = '';
+            // Get last 4 messages
+            const latestMessages = messageHistory.slice(-4);
+            latestMessages.forEach(msg => {
+                const div = document.createElement('div');
+                div.className = 'chat-line';
+                if (msg.sender === 'Server') {
+                    div.innerHTML = `<span class="server-sender">[Server]</span> ${escapeHtml(msg.message)}`;
+                } else {
+                    div.innerHTML = `<span class="sender">[${escapeHtml(msg.sender)}]</span> ${escapeHtml(msg.message)}`;
+                }
+                chatHud.appendChild(div);
+            });
+        }
+
+        // Press 'T' to open chat
+        window.addEventListener('keydown', (e) => {
+            if (!isConnected) return;
+            
+            if (e.key === 't' || e.key === 'T') {
+                if (!isChatOpen) {
+                    e.preventDefault();
+                    isChatOpen = true;
+                    if (document.pointerLockElement) document.exitPointerLock();
+                    chatInputContainer.style.display = 'block';
+                    chatInputField.focus();
+                }
+            }
+
+            if (e.key === 'Escape' && isChatOpen) {
+                closeChat();
+            }
+
+            if (e.key === 'Enter' && isChatOpen) {
+                const text = chatInputField.value.trim();
+                if (text) {
+                    socket.emit('send-chat', text);
+                }
+                chatInputField.value = '';
+                closeChat();
+            }
+
+            // Movement & hotbar when chat is closed
+            if (!isChatOpen) {
+                if (e.key === 'w' || e.key === 'W') socket.emit('start-move', 'forward');
+                if (e.key === 's' || e.key === 'S') socket.emit('start-move', 'back');
+                if (e.key === 'a' || e.key === 'A') socket.emit('start-move', 'left');
+                if (e.key === 'd' || e.key === 'D') socket.emit('start-move', 'right');
+                if (e.key === ' ') socket.emit('jump');
+
+                if (e.key >= '1' && e.key <= '9') {
+                    socket.emit('select-slot', parseInt(e.key) - 1);
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (!isConnected || isChatOpen) return;
+            if (e.key === 'w' || e.key === 'W') socket.emit('stop-move', 'forward');
+            if (e.key === 's' || e.key === 'S') socket.emit('stop-move', 'back');
+            if (e.key === 'a' || e.key === 'A') socket.emit('stop-move', 'left');
+            if (e.key === 'd' || e.key === 'D') socket.emit('stop-move', 'right');
+        });
+
+        function closeChat() {
+            isChatOpen = false;
+            chatInputContainer.style.display = 'none';
+        }
+
+        // --- Hotbar UI ---
+        const hotbarEl = document.getElementById('hotbar');
+        let currentHotbar = Array(9).fill(null);
+        let selectedSlot = 0;
+
+        function renderHotbar() {
+            hotbarEl.innerHTML = '';
+            for (let i = 0; i < 9; i++) {
+                const slotDiv = document.createElement('div');
+                slotDiv.className = `hotbar-slot ${i === selectedSlot ? 'selected' : ''}`;
+                slotDiv.onclick = (e) => { e.stopPropagation(); socket.emit('select-slot', i); };
+                const item = currentHotbar[i];
+                if (item) {
+                    slotDiv.title = item.name;
+                    slotDiv.innerHTML = `<span style="font-size:9px; text-align:center; overflow:hidden; text-overflow:ellipsis; max-width:40px;">${item.name}</span>`;
+                    if (item.count > 1) slotDiv.innerHTML += `<span class="item-count">${item.count}</span>`;
+                }
+                hotbarEl.appendChild(slotDiv);
+            }
+        }
+        renderHotbar();
+
+        window.addEventListener('wheel', (e) => {
+            if (!isPointerLocked) return;
+            selectedSlot = e.deltaY > 0 ? (selectedSlot + 1) % 9 : (selectedSlot - 1 + 9) % 9;
+            socket.emit('select-slot', selectedSlot);
+        });
+
+        function useItem(isDown) { if (isConnected) socket.emit(isDown ? 'start-using-item' : 'stop-using-item'); }
+        function attackTarget() { if (isConnected) socket.emit('attack-action'); }
+        function placeBlock() { if (isConnected) socket.emit('place-block-action'); }
+        function startMove(dir) { if (isConnected) socket.emit('start-move', dir); }
+        function stopMove(dir) { if (isConnected) socket.emit('stop-move', dir); }
+        function jumpBot() { if (isConnected) socket.emit('jump'); }
+
+        // --- Connection Status ---
+        const usernameInput = document.getElementById('username');
+        const hostInput = document.getElementById('host');
+        const portInput = document.getElementById('port');
+        const connectBtn = document.getElementById('connect-btn');
+        let isConnected = false;
+
+        socket.on('status', (state) => {
+            isConnected = state.connected;
+            usernameInput.disabled = isConnected;
+            hostInput.disabled = isConnected;
+            portInput.disabled = isConnected;
+            connectBtn.textContent = isConnected ? 'Disconnect' : 'Connect';
+            connectBtn.className = isConnected ? 'disconnect' : '';
+        });
+
+        socket.on('inventory-update', (data) => {
+            currentHotbar = data.hotbar;
+            selectedSlot = data.heldSlot;
+            renderHotbar();
+        });
+
+        function toggleConnection() {
+            if (!isConnected) {
+                socket.emit('connect-server', {
+                    username: usernameInput.value.trim(),
+                    host: hostInput.value.trim(),
+                    port: portInput.value.trim()
+                });
+            } else {
+                socket.emit('disconnect-server');
+            }
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+    </script>
+</body>
+</html>
