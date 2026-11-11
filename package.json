@@ -1,7 +1,7 @@
 {
   "name": "minecraft-chat-bridge",
   "version": "1.0.0",
-  "description": "Minecraft 1.21.11 web chat bridge with Mineflayer and 3D viewer",
+  "description": "Minecraft 1.21.11 web viewer and inventory bridge",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.19.2",
     "mineflayer": "^4.20.0",
+    "prismarine-viewer": "^1.27.0",
     "socket.io": "^4.7.5",
     "vec3": "^0.1.3"
   },
