@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const mineflayer = require('mineflayer');
-const Vec3 = require('vec3');
+const { mineflayer: mineflayerViewer } = require('prismarine-viewer');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,22 +18,8 @@ let currentConnectionState = {
     port: 25565
 };
 
-function sendInventoryUpdate() {
-    if (!activeBot) return;
-    const hotbarSlots = [];
-    for (let i = 36; i <= 44; i++) {
-        const item = activeBot.inventory.slots[i];
-        hotbarSlots.push(item ? { name: item.name, count: item.count, slot: i - 36 } : null);
-    }
-    io.emit('inventory-update', {
-        hotbar: hotbarSlots,
-        heldSlot: activeBot.quickBarSlot
-    });
-}
-
 io.on('connection', (socket) => {
     socket.emit('status', currentConnectionState);
-    if (activeBot) sendInventoryUpdate();
 
     socket.on('connect-server', (data) => {
         const { host, port, username } = data;
@@ -48,14 +34,25 @@ io.on('connection', (socket) => {
                 host: currentConnectionState.host,
                 port: currentConnectionState.port,
                 username: currentConnectionState.username,
-                version: '1.21.1' // Locked to Minecraft 1.21+ compatibility
+                version: '1.21.1'
             });
 
             activeBot.on('spawn', () => {
                 currentConnectionState.connected = true;
                 io.emit('status', currentConnectionState);
                 io.emit('chat-message', { sender: 'Server', message: 'Successfully joined the server!' });
-                sendInventoryUpdate();
+
+                // Start the browser 3D world viewer on port 3000 (or integrated route)
+                mineflayerViewer(activeBot, { port: 3007, firstPerson: true });
+                io.emit('chat-message', { sender: 'Server', message: '3D World Viewer active on port 3007!' });
+            });
+
+            // Listen for container/chest openings sent by the server
+            activeBot.on('windowOpen', (window) => {
+                io.emit('chat-message', { sender: 'Server', message: `Container opened: ${window.title || 'Inventory/Chest'}` });
+                // Pass window slots to client interface
+                const items = window.slots.map(item => item ? { name: item.name, count: item.count } : null);
+                io.emit('inventory-opened', { title: window.title, items });
             });
 
             activeBot.on('chat', (username, message) => {
@@ -66,17 +63,8 @@ io.on('connection', (socket) => {
                 io.emit('chat-message', { sender: 'Server', message: message });
             });
 
-            activeBot.on('windowUpdate', () => {
-                sendInventoryUpdate();
-            });
-
             activeBot.on('end', (reason) => {
                 io.emit('chat-message', { sender: 'Server', message: `Disconnected: ${reason}` });
-                cleanupBot();
-            });
-
-            activeBot.on('error', (err) => {
-                io.emit('chat-message', { sender: 'Server', message: `Error: ${err.message}` });
                 cleanupBot();
             });
 
@@ -89,57 +77,10 @@ io.on('connection', (socket) => {
     socket.on('send-chat', (message) => {
         if (activeBot && currentConnectionState.connected) {
             activeBot.chat(message);
-            // If it's a command starting with /, label it as Server execution
-            const senderName = message.startsWith('/') ? 'Server' : currentConnectionState.username;
-            io.emit('chat-message', { sender: senderName, message: message });
         }
-    });
-
-    socket.on('select-slot', (slotIndex) => {
-        if (activeBot && slotIndex >= 0 && slotIndex <= 8) {
-            activeBot.setQuickBarSlot(slotIndex);
-            sendInventoryUpdate();
-        }
-    });
-
-    socket.on('start-using-item', () => { if (activeBot) activeBot.activateItem(); });
-    socket.on('stop-using-item', () => { if (activeBot) activeBot.deactivateItem(); });
-
-    socket.on('attack-action', () => {
-        if (!activeBot) return;
-        const target = activeBot.nearestEntity((entity) => entity.type === 'player' || entity.type === 'mob');
-        if (target && activeBot.entity.position.distanceTo(target.position) < 4) {
-            activeBot.attack(target);
-        } else {
-            activeBot.swingArm();
-        }
-    });
-
-    socket.on('place-block-action', async () => {
-        if (!activeBot) return;
-        try {
-            const referenceBlock = activeBot.blockAtCursor(4) || activeBot.blockAt(activeBot.entity.position.offset(0, -1, 0));
-            if (referenceBlock) {
-                await activeBot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
-                io.emit('chat-message', { sender: 'Server', message: 'Placed block successfully!' });
-            }
-        } catch (err) {
-            io.emit('chat-message', { sender: 'Server', message: `Could not place block: ${err.message}` });
-        }
-    });
-
-    socket.on('start-move', (dir) => { if (activeBot) activeBot.setControlState(dir, true); });
-    socket.on('stop-move', (dir) => { if (activeBot) activeBot.setControlState(dir, false); });
-    socket.on('jump', () => {
-        if (!activeBot) return;
-        activeBot.setControlState('jump', true);
-        setTimeout(() => activeBot.setControlState('jump', false), 250);
     });
 
     socket.on('disconnect-server', () => {
-        if (activeBot) {
-            activeBot.quit();
-        }
         cleanupBot();
         io.emit('chat-message', { sender: 'Server', message: 'Disconnected by user.' });
     });
